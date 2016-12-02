@@ -135,7 +135,27 @@ public class ClientAuthCrash {
 
         DummyService dummyService = new DummyService();
 
-        builder.addService(dummyService.bindService());
+        // Confirm that client credentials made it through as expected.
+        builder.addService(ServerInterceptors.intercept(dummyService.bindService(),
+                new ServerInterceptor() {
+                    @Override
+                    public <ReqT, RespT> ServerCall.Listener<ReqT> interceptCall(ServerCall<ReqT, RespT> call, Metadata headers, ServerCallHandler<ReqT, RespT> next) {
+                        SSLSession sslSession = call.attributes().get(ServerCall.SSL_SESSION_KEY);
+                        assertNotNull(sslSession);
+                        try {
+                            Certificate[] peerCerts = sslSession.getPeerCertificates();
+                            assertEquals(2, peerCerts.length);
+                            X509Certificate clientCert = (X509Certificate) peerCerts[0];
+                            assertEquals("CN=tlsclient", clientCert.getSubjectDN().toString());
+                            X509Certificate trustChainCert = (X509Certificate) peerCerts[1];
+                            assertEquals("CN=localhost", trustChainCert.getSubjectDN().toString());
+                        } catch (SSLPeerUnverifiedException e) {
+                            e.printStackTrace();
+                            throw new AssertionError("Server unable to verify client certificate");
+                        }
+                        return next.startCall(call, headers);
+                    }
+                }));
 
         Server grpcServer = builder.build();
         grpcServer.start();
@@ -158,5 +178,25 @@ public class ClientAuthCrash {
 
         grpcServer.shutdown();
         grpcServer.awaitTermination();
+    }
+
+    private static void assertNotNull(Object object) {
+        if (object == null) {
+            fail("Expected object to be not null.");
+        }
+    }
+    private static void assertEquals(int expected, int actual) {
+        if (expected != actual) {
+            fail("Expected=" + expected + ", actual=" + actual);
+        }
+    }
+    private static void assertEquals(Object expected, Object actual) {
+        if (!expected.equals(actual)) {
+            fail("Expected=" + expected.toString() + ", " + "actual=" + actual.toString());
+        }
+    }
+
+    private static void fail(String message) {
+        throw new AssertionError("An assertion failed: " + message);
     }
 }
